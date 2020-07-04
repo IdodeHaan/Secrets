@@ -8,6 +8,7 @@ const passport = require("passport");
 const passportLocalMongoose = require("passport-local-mongoose");
 const app = express();
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const SpotifyStrategy = require('passport-spotify').Strategy;
 const findOrCreate = require('mongoose-findorcreate');
 
 app.use(express.static("public"));
@@ -29,7 +30,9 @@ mongoose.set("useCreateIndex", true);
 const userSchema = new mongoose.Schema({
   email: String,
   password: String,
-  googleId: String
+  googleId: String,
+  spotifyId: String,
+  secret: String
 });
 
 userSchema.plugin(passportLocalMongoose);
@@ -57,11 +60,28 @@ passport.use(new GoogleStrategy({
     userProfileURL: "https://www.googleapis.com/oauth2/v3/userinfo"
   },
   function(accessToken, refreshToken, profile, cb) {
+    console.log("google profile.id = " + profile.id);
     User.findOrCreate({ googleId: profile.id }, function (err, user) {
       return cb(err, user);
     });
   }
 ));
+
+passport.use(
+  new SpotifyStrategy(
+    {
+      clientID: process.env.SPOTIFY_CLIENT_ID,
+      clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+      callbackURL: 'http://localhost:3000/auth/spotify/secrets'
+    },
+    function(accessToken, refreshToken, expires_in, profile, done) {
+      console.log("spotify profile.id = " + profile.id);
+      User.findOrCreate({ spotifyId: profile.id }, function(err, user) {
+        return done(err, user);
+      });
+    }
+  )
+);
 
 app.get("/", function(req, res) {
   res.render("home");
@@ -77,6 +97,18 @@ app.get('/auth/google/secrets',
       res.redirect('/secrets');
     });
 
+app.get('/auth/spotify', passport.authenticate('spotify'), function(req, res) {
+      // The request will be redirected to spotify for authentication, so this
+      // function will not be called.
+    });
+
+app.get('/auth/spotify/secrets',
+  passport.authenticate('spotify', { failureRedirect: '/login' }),
+    function(req, res) {
+        // Successful authentication, redirect home.
+        res.redirect('/secrets');
+      });
+
 app.get("/login", function(req, res) {
   res.render("login");
 });
@@ -86,16 +118,28 @@ app.get("/register", function(req, res) {
 });
 
 app.get("/secrets", function (req, res) {
-  if (req.isAuthenticated()){
-    res.render("secrets");
-  } else {
-    res.render("login");
-  }
+  User.find({secret: {$ne: null}}, function(err, foundUsers) {
+    if (err) {
+      console.log(err);
+    } else {
+      if (foundUsers) {
+        res.render("secrets", {usersWithSecrets: foundUsers});
+      }
+    }
+  });
 });
 
 app.get("/logout", function (req, res) {
   req.logout();
   res.redirect("/");
+});
+
+app.get("/submit", function (req, res) {
+  if (req.isAuthenticated()){
+    res.render("submit");
+  } else {
+    res.render("login");
+  }
 });
 
 app.post("/register", function(req, res) {
@@ -123,6 +167,22 @@ app.post("/login", function(req, res) {
       passport.authenticate("local")(req, res, function() {
         res.redirect("/secrets");
       });
+    }
+  });
+});
+
+app.post("/submit", function(req, res) {
+  const submittedSecret = req.body.secret;
+  User.findById(req.user.id, function(err, foundUser) {
+    if (err) {
+      console.log(err);
+    } else {
+      if (foundUser) {
+        foundUser.secret = submittedSecret;
+        foundUser.save(function() {
+          res.redirect("/secrets");
+        });
+      }
     }
   });
 });
